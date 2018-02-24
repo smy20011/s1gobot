@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	apiToken    = flag.String("token", "", "API Token of telegram")
+	apiToken    = os.Getenv("TELEGRAM_BOT_TOKEN")
 	gcsBucket   = flag.String("gcs_bucket", "", "Google Cloud Storage bucket to backup data")
 	userID      = flag.Int("user_id", 0, "authorized user id")
 	s1goAddress = "localhost:8080"
@@ -35,8 +35,8 @@ const (
 	script = `#!/bin/bash
 
 start_s1go() {
-	./s1go --interval=1800 --username=$S1GOUSERNAME \
-			--password=$S1GOPASSWORD >> fetch.log 2>&1 &
+	./s1go --interval=1800 --username=$S1GO_USERNAME \
+			--password=$S1GO_PASSWORD >> fetch.log 2>&1 &
 }
 
 kill_s1go() {
@@ -77,15 +77,15 @@ func initialize() {
 	if err != nil {
 		panic(err)
 	}
-	// err = execute(cmdDeploy)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	err = execute(cmdDeploy)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func startChatBot() {
 	b, err := telebot.NewBot(telebot.Settings{
-		Token:  *apiToken,
+		Token:  apiToken,
 		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
 	})
 
