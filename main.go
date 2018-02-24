@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ var (
 	userID      = flag.Int("user_id", 0, "authorized user id")
 	s1goAddress = "localhost:8080"
 	storage     *gcs.Client
+	bot         *telebot.Bot
 	ctx         = context.Background()
 )
 
@@ -66,18 +68,19 @@ func main() {
 }
 
 func initialize() {
-	err := ioutil.WriteFile("service", []byte(script), 0777)
-	if err != nil {
-		panic(err)
-	}
-	err = execute(cmdDeploy)
-	if err != nil {
-		panic(err)
-	}
+	var err error
 	storage, err = gcs.NewClient(ctx)
 	if err != nil {
 		panic(err)
 	}
+	err = ioutil.WriteFile("service", []byte(script), 0777)
+	if err != nil {
+		panic(err)
+	}
+	// err = execute(cmdDeploy)
+	// if err != nil {
+	// 	panic(err)
+	// }
 }
 
 func startChatBot() {
@@ -125,14 +128,13 @@ func handleBackup(resp response) error {
 	if len(*gcsBucket) == 0 {
 		return errors.New("GCS upload is not supported")
 	}
-	err := execute(cmdStop)
-	if err != nil {
-		return err
-	}
+
+	execute(cmdStop)
 	defer execute(cmdStart)
 
-	objectName := time.Now().Format("s1bot_backup_2006_01_02.gzip")
-	err = execute(fmt.Sprintf("zip %s Stage1st.BoltDB", objectName))
+	objectName := "stage1st_" + time.Now().Format("2006_01_02.gzip")
+	log.Printf("Store to file %s", objectName)
+	err := execute(fmt.Sprintf("zip %s Stage1st.BoltDB", objectName))
 	if err != nil {
 		return err
 	}
@@ -140,11 +142,18 @@ func handleBackup(resp response) error {
 
 	object := storage.Bucket(*gcsBucket).Object(objectName)
 	writer := object.NewWriter(ctx)
+
 	file, err := os.Open(objectName)
 	if err != nil {
 		return err
 	}
+	defer file.Close()
+
 	size, err := io.Copy(writer, file)
+	if err != nil {
+		return err
+	}
+	err = writer.Close()
 	if err != nil {
 		return err
 	}
@@ -165,7 +174,12 @@ func commandHandler(command string) func(response) error {
 func execute(command string) error {
 	commands := strings.Split(command, " ")
 	cmd := exec.Command(commands[0], commands[1:]...)
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("Error execute command %s: %s",
+			command, err.Error())
+	}
+	return nil
 }
 
 type response interface {
