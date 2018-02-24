@@ -2,21 +2,31 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"golang.org/x/net/context"
+
+	gcs "cloud.google.com/go/storage"
 
 	"github.com/tucnak/telebot"
 )
 
 var (
 	apiToken    = flag.String("token", "", "API Token of telegram")
+	gcsBucket   = flag.String("gcs_bucket", "", "Google Cloud Storage bucket to backup data")
 	userID      = flag.Int("user_id", 0, "authorized user id")
 	s1goAddress = "localhost:8080"
+	storage     *gcs.Client
+	ctx         = context.Background()
 )
 
 const (
@@ -43,6 +53,10 @@ case "$1" in
 	deploy)  build_s1go; kill_s1go; start_s1go ;;
 	*) exit 1
 esac`
+	cmdStart   = "./service start"
+	cmdStop    = "./service stop"
+	cmdRestart = "./service restart"
+	cmdDeploy  = "./service deploy"
 )
 
 func main() {
@@ -56,7 +70,11 @@ func initialize() {
 	if err != nil {
 		panic(err)
 	}
-	err = execute("./service deploy")
+	err = execute(cmdDeploy)
+	if err != nil {
+		panic(err)
+	}
+	storage, err = gcs.NewClient(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -73,10 +91,11 @@ func startChatBot() {
 	}
 
 	handle(b, "/status", handleStatus)
-	handle(b, "/deploy", serviceHandler("./service deploy"))
-	handle(b, "/start", serviceHandler("./service start"))
-	handle(b, "/stop", serviceHandler("./service stop"))
-	handle(b, "/restart", serviceHandler("./service restart"))
+	handle(b, "/deploy", commandHandler(cmdDeploy))
+	handle(b, "/start", commandHandler(cmdStart))
+	handle(b, "/stop", commandHandler(cmdStop))
+	handle(b, "/restart", commandHandler(cmdRestart))
+	handle(b, "/backup", handleBackup)
 	b.Start()
 }
 
@@ -102,7 +121,38 @@ func handleStatus(response response) (err error) {
 	return nil
 }
 
-func serviceHandler(command string) func(response) error {
+func handleBackup(resp response) error {
+	if len(*gcsBucket) == 0 {
+		return errors.New("GCS upload is not supported")
+	}
+	err := execute(cmdStop)
+	if err != nil {
+		return err
+	}
+	defer execute(cmdStart)
+
+	objectName := time.Now().Format("s1bot_backup_2006_01_02.gzip")
+	err = execute(fmt.Sprintf("zip %s Stage1st.BoltDB", objectName))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(objectName)
+
+	object := storage.Bucket(*gcsBucket).Object(objectName)
+	writer := object.NewWriter(ctx)
+	file, err := os.Open(objectName)
+	if err != nil {
+		return err
+	}
+	size, err := io.Copy(writer, file)
+	if err != nil {
+		return err
+	}
+	resp.Send(fmt.Sprintf("Succss! Backup size: %d", size))
+	return nil
+}
+
+func commandHandler(command string) func(response) error {
 	return func(resp response) error {
 		err := execute(command)
 		if err == nil {
